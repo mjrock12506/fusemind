@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  agent:
+    name: AI Agent (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core/fusemind-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: python -c "import main; print('agent imports OK')"
+
+  wear-os:
+    name: Wear OS adapter (Kotlin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+  ios:
+    name: iOS core (Swift)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "iOS build wired up in Phase 1"
