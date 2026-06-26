@@ -92,6 +92,17 @@ public final class BLEWatchAdapter: NSObject, WatchAdapter {
     public func connect() async -> Bool {
         return await withCheckedContinuation { continuation in
             queue.async {
+                // Already connected → succeed immediately (idempotent).
+                if self.state == .connected {
+                    continuation.resume(returning: true)
+                    return
+                }
+                // A connect is already in flight → don't clobber its continuation
+                // (that would leak it and hang the first caller forever).
+                if self.connectContinuation != nil {
+                    continuation.resume(returning: false)
+                    return
+                }
                 self.connectContinuation = continuation
                 self.beginScanIfPoweredOn()
                 self.startConnectTimeout()
