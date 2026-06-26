@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FuseMind Wear OS companion — manifest.
+
+  Phase 1 (P1-001) needs the BLE GATT-server + advertising permissions and a
+  WakeLock. BLUETOOTH_CONNECT / BLUETOOTH_ADVERTISE are runtime permissions on
+  Android 12+ (API 31) and must also be requested from the host Activity.
+
+  The legacy BLUETOOTH / BLUETOOTH_ADMIN permissions cover Wear OS devices on
+  API < 31. maxSdkVersion keeps them off newer devices that use the new model.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="app.fusemind.wearos">
+
+    <!-- Wear OS hardware + BLE feature flags -->
+    <uses-feature android:name="android.hardware.type.watch" />
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+
+    <!-- Android 12+ (API 31+) Bluetooth runtime permissions -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
+    <!-- Legacy Bluetooth permissions for API < 31 -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!-- Keep advertising alive through screen-off (PARTIAL_WAKE_LOCK) -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <application
+        android:label="FuseMind"
+        android:allowBackup="true">
+        <!-- Activity + foreground Service that own FuseMindWatchService land in
+             P1-004 (status UI) and P1-003 (persistence). -->
+    </application>
+</manifest>
