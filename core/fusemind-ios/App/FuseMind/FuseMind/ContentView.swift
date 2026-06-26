@@ -2,9 +2,11 @@
 //  ContentView.swift
 //  FuseMind (iOS app target)
 //
-//  P1-002 test harness UI: a Connect button, the live ConnectionState, and the
-//  WatchCapabilities read back from the watch on handshake. Talks ONLY to the
-//  WatchAdapter contract — it never knows the watch is a Wear OS device.
+//  P1-004 status UI: always shows an explicit, human-readable ConnectionState
+//  (Scanning / Connecting / Connected / Degraded / Disconnected) with a distinct
+//  colour and label, plus the connected watch's name and its decoded
+//  WatchCapabilities. The view observes the view model ONLY — it makes no direct
+//  BLE calls, and never learns the watch is a Wear OS device (adapter pattern).
 //
 //  Apache-2.0 © FuseMind contributors
 //
@@ -13,12 +15,14 @@ import SwiftUI
 import FuseMindCore
 import Combine
 
+
 /// Bridges the BLEWatchAdapter (callbacks on a background BLE queue) to SwiftUI
 /// state on the main actor. The view observes this; it never touches BLE directly.
 @MainActor
 final class WatchLinkViewModel: ObservableObject {
     @Published var state: ConnectionState = .disconnected
     @Published var capabilities: WatchCapabilities?
+    @Published var watchName: String?
 
     /// The core adapter. Typed as the protocol on purpose — swapping in a
     /// different watch platform later changes only this one line.
@@ -31,7 +35,9 @@ final class WatchLinkViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.state = newState
-                self.capabilities = (newState == .connected) ? self.adapter.capabilities() : nil
+                let connected = (newState == .connected)
+                self.capabilities = connected ? self.adapter.capabilities() : nil
+                self.watchName = connected ? self.adapter.connectedWatchName : nil
             }
         }
     }
@@ -49,11 +55,16 @@ struct ContentView: View {
     @StateObject private var model = WatchLinkViewModel()
 
     var body: some View {
-        VStack(spacing: 28) {
+        VStack(spacing: 24) {
             Text("FuseMind")
                 .font(.largeTitle).bold()
 
             statusBadge
+
+            Text(hint(for: model.state))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
 
             Button(model.state == .disconnected ? "Connect watch" : "Disconnect") {
                 model.state == .disconnected ? model.connect() : model.disconnect()
@@ -71,9 +82,15 @@ struct ContentView: View {
     }
 
     private var statusBadge: some View {
-        HStack(spacing: 10) {
-            Circle().fill(color(for: model.state)).frame(width: 14, height: 14)
-            Text(label(for: model.state)).font(.headline)
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Circle().fill(color(for: model.state)).frame(width: 14, height: 14)
+                Text(label(for: model.state)).font(.headline)
+            }
+            // The connected watch's name (P1-004). Hidden until we have it.
+            if model.state == .connected, let name = model.watchName {
+                Text(name).font(.subheadline).foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -107,7 +124,18 @@ struct ContentView: View {
         case .scanning:     return "Scanning…"
         case .connecting:   return "Connecting…"
         case .connected:    return "Connected"
-        case .degraded:     return "Degraded (reconnecting)"
+        case .degraded:     return "Degraded"
+        }
+    }
+
+    /// A human-readable one-liner explaining what each state means.
+    private func hint(for state: ConnectionState) -> String {
+        switch state {
+        case .disconnected: return "Tap Connect to find your watch."
+        case .scanning:     return "Looking for your watch nearby…"
+        case .connecting:   return "Handshaking with your watch…"
+        case .connected:    return "Your watch is linked."
+        case .degraded:     return "Watch out of range — reconnecting automatically…"
         }
     }
 
