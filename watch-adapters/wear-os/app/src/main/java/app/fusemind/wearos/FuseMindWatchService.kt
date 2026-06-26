@@ -127,12 +127,25 @@ class FuseMindWatchService(private val context: Context) : WatchSideAdapter {
     private var advertiser: BluetoothLeAdvertiser? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
+    /** True once advertising has been issued. Guards against starting twice,
+     *  which BLE rejects with ADVERTISE_FAILED_ALREADY_STARTED (error code 3).
+     *  @Volatile: read/written from both the caller thread and the BLE callback. */
+    @Volatile private var advertising = false
+
     /** Centrals (phones) that have subscribed to the Notify characteristics. */
     private val subscribers = mutableSetOf<BluetoothDevice>()
 
     // ---- Lifecycle ---------------------------------------------------------
 
     override fun startGattServer(): Boolean {
+        // Idempotent: a re-entrant start (e.g. the service receiving a second
+        // onStartCommand when the Activity re-resumes) must not reopen the
+        // server or re-advertise. Already up → nothing to do.
+        if (gattServer != null) {
+            Log.d(tag, "GATT server already running; startGattServer() is a no-op")
+            return true
+        }
+
         val adapter = bluetoothManager.adapter
         if (adapter == null || !adapter.isEnabled) {
             Log.w(tag, "Bluetooth is off or unavailable; cannot start GATT server")
@@ -161,6 +174,7 @@ class FuseMindWatchService(private val context: Context) : WatchSideAdapter {
     override fun stopGattServer() {
         advertiser?.stopAdvertising(advertiseCallback)
         advertiser = null
+        advertising = false
         gattServer?.close()
         gattServer = null
         subscribers.clear()
@@ -252,7 +266,16 @@ class FuseMindWatchService(private val context: Context) : WatchSideAdapter {
             Log.e(tag, "No LE advertiser available")
             return
         }
+        // Guard: never issue a second startAdvertising over a live one — that's
+        // what produced the recurring "Advertising failed: 3". Set the flag
+        // optimistically (before the async callback) so a rapid re-entry is
+        // blocked too; the callback corrects it if the start actually fails.
+        if (advertising) {
+            Log.d(tag, "Already advertising; skipping re-start (avoids ALREADY_STARTED)")
+            return
+        }
         advertiser = leAdvertiser
+        advertising = true
 
         val settings = AdvertiseSettings.Builder()
             .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
@@ -272,11 +295,20 @@ class FuseMindWatchService(private val context: Context) : WatchSideAdapter {
 
     private val advertiseCallback = object : AdvertiseCallback() {
         override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+            advertising = true
             Log.i(tag, "Advertising started")
         }
 
         override fun onStartFailure(errorCode: Int) {
-            Log.e(tag, "Advertising failed: $errorCode")
+            if (errorCode == AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED) {
+                // The stack is already advertising — that's the state we want,
+                // so keep the flag set rather than treating it as a failure.
+                advertising = true
+                Log.w(tag, "Advertising already started (code 3); treating as active")
+            } else {
+                advertising = false
+                Log.e(tag, "Advertising failed: $errorCode")
+            }
         }
     }
 

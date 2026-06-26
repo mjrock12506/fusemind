@@ -2,15 +2,18 @@
 <!--
   FuseMind Wear OS companion — manifest.
 
-  Phase 1 (P1-001) needs the BLE GATT-server + advertising permissions and a
-  WakeLock. BLUETOOTH_CONNECT / BLUETOOTH_ADVERTISE are runtime permissions on
-  Android 12+ (API 31) and must also be requested from the host Activity.
+  Phase 1 (P1-001) needs the BLE GATT-server + advertising permissions, a
+  WakeLock, and a foreground service to keep advertising alive through
+  screen-off. BLUETOOTH_CONNECT / BLUETOOTH_ADVERTISE are runtime permissions
+  on Android 12+ (API 31) and are requested from MainActivity.
 
   The legacy BLUETOOTH / BLUETOOTH_ADMIN permissions cover Wear OS devices on
   API < 31. maxSdkVersion keeps them off newer devices that use the new model.
+
+  Note: the package/namespace is declared in app/build.gradle.kts (AGP 8),
+  so there is no package="" attribute here.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="app.fusemind.wearos">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- Wear OS hardware + BLE feature flags -->
     <uses-feature android:name="android.hardware.type.watch" />
@@ -33,10 +36,31 @@
     <!-- Keep advertising alive through screen-off (PARTIAL_WAKE_LOCK) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- Foreground service that hosts the GATT server -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Android 13+ (API 33+) gate for posting the ongoing status notification -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="FuseMind"
-        android:allowBackup="true">
-        <!-- Activity + foreground Service that own FuseMindWatchService land in
-             P1-004 (status UI) and P1-003 (persistence). -->
+        android:allowBackup="true"
+        android:supportsRtl="true">
+
+        <!-- Launcher screen: requests permissions, then starts the service -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Owns the BLE GATT server + advertising for its whole lifetime -->
+        <service
+            android:name=".FuseMindForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
     </application>
 </manifest>
