@@ -1,0 +1,6 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+groq>=0.9          # Phase 4+: LLM + Whisper
+httpx>=0.27        # Phase 5: Whoop REST API
+python-dotenv>=1.0
