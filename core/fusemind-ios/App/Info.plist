@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FuseMind iOS app — Info.plist keys required by Phase 1 (P1-002).
+
+  - UIBackgroundModes: bluetooth-central keeps the BLE link alive while the app
+    is backgrounded / the phone is locked. Pairs with the central's
+    CBCentralManagerOptionRestoreIdentifierKey for state restoration.
+  - NSBluetoothAlwaysUsageDescription is mandatory on iOS 13+ or the app is
+    killed the moment it touches CoreBluetooth.
+
+  This is the key subset; the real app target's Info.plist (created when the
+  Xcode app shell lands in P1-004) must include these.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>bluetooth-central</string>
+    </array>
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>FuseMind connects to your watch over Bluetooth to bridge notifications, calls, and health data to your iPhone.</string>
+</dict>
+</plist>
