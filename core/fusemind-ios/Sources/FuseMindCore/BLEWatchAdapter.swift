@@ -14,17 +14,20 @@
 //  FuseMind companion (e.g. closed Garmin/Fitbit firmware) get their own
 //  adapter later. The core never learns which watch is on the other end.
 //
-//  Phase 1 scope (P1-002): scan → connect → discover → read Capabilities once,
-//  with CoreBluetooth background mode and state restoration. Sending/reading of
-//  feature payloads is wired minimally; richer flows land in Phases 2/3/5.
-//
-//  NOT hardware-tested yet — see NOTES.md for the on-device checklist.
+//  Phase 1 scope:
+//   - P1-002: scan → connect → discover → read Capabilities once, with
+//     CoreBluetooth background mode and state restoration.
+//   - P1-003: detect drops, auto-reconnect with exponential backoff, and emit
+//     os_log diagnostics for the whole connection lifecycle.
+//  Sending/reading of feature payloads is wired minimally; richer flows land in
+//  Phases 2/3/5.
 //
 //  Apache-2.0 © FuseMind contributors
 //
 
 import Foundation
 import CoreBluetooth
+import os
 
 /// FuseMind custom GATT UUIDs. MUST match the watch side byte-for-byte.
 /// See docs/ble-protocol.md and FuseMindGatt (Kotlin).
@@ -66,6 +69,22 @@ public final class BLEWatchAdapter: NSObject, WatchAdapter {
 
     /// Resolved when the handshake (capabilities read) completes or times out.
     private var connectContinuation: CheckedContinuation<Bool, Never>?
+
+    /// Human-readable name of the connected watch, surfaced to the UI (P1-004).
+    /// Set on handshake, cleared on disconnect. Read in the same main-actor hop
+    /// the VM uses for `capabilities()`, so no extra synchronisation is needed.
+    public private(set) var connectedWatchName: String?
+
+    /// Lifecycle diagnostics (P1-003). Watch live with:
+    ///   log stream --predicate 'subsystem == "app.fusemind.ble"'
+    private let logger = Logger(subsystem: "app.fusemind.ble", category: "central")
+
+    // Auto-reconnect bookkeeping (P1-003).
+    private var isReconnecting = false
+    private var reconnectAttempts = 0
+    /// True only while WE tore the link down, so a user-driven disconnect does
+    /// not kick off the auto-reconnect loop.
+    private var userInitiatedDisconnect = false
 
     /// Larger MTU so Phase-2 notification bodies exceed the 23-byte default.
     /// iOS negotiates MTU automatically on connect; we cap our writes to the
@@ -112,11 +131,18 @@ public final class BLEWatchAdapter: NSObject, WatchAdapter {
 
     public func disconnect() {
         queue.async {
-            if let watch = self.watch {
-                self.central.cancelPeripheralConnection(watch)
-            }
+            self.diag("user requested disconnect")
+            self.userInitiatedDisconnect = true
+            self.stopReconnect()
             self.central.stopScan()
-            self.transition(to: .disconnected)
+            // Resolve a still-pending connect() so its caller isn't left hanging.
+            self.finishConnect(success: false)
+            if let watch = self.watch {
+                // .disconnected is set in didDisconnectPeripheral (honours the flag).
+                self.central.cancelPeripheralConnection(watch)
+            } else {
+                self.transition(to: .disconnected)
+            }
         }
     }
 
@@ -152,6 +178,7 @@ public final class BLEWatchAdapter: NSObject, WatchAdapter {
 
     private func beginScanIfPoweredOn() {
         guard central.state == .poweredOn else { return } // will retry in didUpdateState
+        diag("scan started for FuseMind service")
         transition(to: .scanning)
         central.scanForPeripherals(
             withServices: [FuseMindGATT.service],
@@ -163,7 +190,9 @@ public final class BLEWatchAdapter: NSObject, WatchAdapter {
         // Surface a failed handshake rather than hanging the caller forever.
         queue.asyncAfter(deadline: .now() + 15) { [weak self] in
             guard let self, self.connectContinuation != nil, self.state != .connected else { return }
+            self.diag("initial connect timed out after 15s; giving up")
             self.central.stopScan()
+            self.stopReconnect()
             self.transition(to: .disconnected)
             self.finishConnect(success: false)
         }
@@ -185,12 +214,59 @@ public final class BLEWatchAdapter: NSObject, WatchAdapter {
 
     private func transition(to newState: ConnectionState) {
         guard newState != state else { return }
+        logger.info("state: \(self.state.rawValue, privacy: .public) → \(newState.rawValue, privacy: .public)")
         state = newState
         onStateChange?(newState)
     }
 
+    /// One-liner lifecycle diagnostics, always public (never <private>-redacted).
+    private func diag(_ message: String) {
+        logger.info("\(message, privacy: .public)")
+    }
+
     /// UI hook (P1-004). Called on the BLE queue; marshal to main in the view.
     public var onStateChange: ((ConnectionState) -> Void)?
+
+    // MARK: - Auto-reconnect (P1-003)
+
+    /// Begin (or no-op if already) the backoff reconnect loop after an
+    /// unexpected drop. Self-terminates the moment `didConnect` fires.
+    private func startReconnect() {
+        guard !isReconnecting, watch != nil else { return }
+        isReconnecting = true
+        reconnectAttempts = 0
+        attemptReconnect()
+    }
+
+    private func attemptReconnect() {
+        // Stop once we've recovered, lost the peripheral, or the user tore it down.
+        guard isReconnecting, state != .connected, let watch = self.watch else {
+            isReconnecting = false
+            return
+        }
+        reconnectAttempts += 1
+        let delay = backoffDelay(for: reconnectAttempts)
+        diag("reconnect attempt \(reconnectAttempts) (next retry in \(Int(delay))s)")
+        // A pending connect: CoreBluetooth completes it whenever the watch is
+        // back in range — even while the app is backgrounded. Re-issuing is a
+        // safe no-op if one is already outstanding; the timer mainly gives us
+        // observable attempts and re-arms after a Bluetooth toggle.
+        central.connect(watch, options: nil)
+        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+            self?.attemptReconnect()
+        }
+    }
+
+    private func stopReconnect() {
+        if isReconnecting { diag("reconnect loop stopped") }
+        isReconnecting = false
+        reconnectAttempts = 0
+    }
+
+    /// Exponential backoff: 2, 4, 8, 16, 30, 30, … seconds (capped).
+    private func backoffDelay(for attempt: Int) -> TimeInterval {
+        min(pow(2.0, Double(min(attempt, 5))), 30.0)
+    }
 }
 
 // MARK: - CBCentralManagerDelegate
@@ -200,9 +276,17 @@ extension BLEWatchAdapter: CBCentralManagerDelegate {
     public func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            // If a connect() is pending, (re)start scanning now that BLE is ready.
-            if connectContinuation != nil { beginScanIfPoweredOn() }
+            diag("Bluetooth powered on")
+            if isReconnecting, let watch = self.watch {
+                // Recover the link after a Bluetooth restart on this phone.
+                diag("Bluetooth back on; re-issuing reconnect")
+                central.connect(watch, options: nil)
+            } else if connectContinuation != nil {
+                // A connect() was waiting for BLE to come up — scan now.
+                beginScanIfPoweredOn()
+            }
         case .poweredOff, .unauthorized, .unsupported:
+            diag("Bluetooth unavailable: \(central.state.rawValue)")
             transition(to: .disconnected)
         default:
             break
@@ -215,6 +299,7 @@ extension BLEWatchAdapter: CBCentralManagerDelegate {
                                rssi RSSI: NSNumber) {
         // First FuseMind-advertising watch wins. Retain it (P1-003 reconnect).
         central.stopScan()
+        diag("discovered watch \(peripheral.name ?? peripheral.identifier.uuidString) (RSSI \(RSSI))")
         watch = peripheral
         peripheral.delegate = self
         transition(to: .connecting)
@@ -222,11 +307,18 @@ extension BLEWatchAdapter: CBCentralManagerDelegate {
     }
 
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        diag("connected to \(peripheral.name ?? peripheral.identifier.uuidString); discovering services")
+        // Recovered (or first connect): stop any backoff loop and re-handshake.
+        stopReconnect()
+        transition(to: .connecting)
         peripheral.discoverServices([FuseMindGATT.service])
     }
 
     public func centralManager(_ central: CBCentralManager,
                                didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        diag("failed to connect: \(error?.localizedDescription ?? "unknown")")
+        // While reconnecting, let the backoff loop keep retrying.
+        guard !isReconnecting else { return }
         transition(to: .disconnected)
         finishConnect(success: false)
     }
@@ -234,10 +326,22 @@ extension BLEWatchAdapter: CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager,
                                didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         characteristics.removeAll()
-        // Out of range / dropped link = degraded, not disconnected (P1-003).
-        // Retain the peripheral and try to reconnect when it returns.
+        connectedWatchName = nil
+        diag("disconnected: \(error?.localizedDescription ?? "clean teardown")")
+
+        if userInitiatedDisconnect {
+            // We asked for this — settle to disconnected and do NOT reconnect.
+            userInitiatedDisconnect = false
+            watch = nil
+            stopReconnect()
+            transition(to: .disconnected)
+            return
+        }
+
+        // Unexpected drop (walked out of range, watch BT off, etc.): stay
+        // degraded and auto-reconnect rather than giving up (P1-003).
         transition(to: .degraded)
-        central.connect(peripheral, options: nil)
+        startReconnect()
     }
 
     /// State restoration: iOS relaunched us in the background with the link.
@@ -245,6 +349,7 @@ extension BLEWatchAdapter: CBCentralManagerDelegate {
                                willRestoreState dict: [String: Any]) {
         if let restored = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral],
            let peripheral = restored.first {
+            diag("state restored in background; re-adopting \(peripheral.name ?? peripheral.identifier.uuidString)")
             watch = peripheral
             peripheral.delegate = self
         }
@@ -257,10 +362,12 @@ extension BLEWatchAdapter: CBPeripheralDelegate {
 
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let service = peripheral.services?.first(where: { $0.uuid == FuseMindGATT.service }) else {
+            diag("service discovery failed; not a FuseMind watch")
             transition(to: .disconnected)
             finishConnect(success: false)
             return
         }
+        diag("FuseMind service discovered; discovering characteristics")
         peripheral.discoverCharacteristics(nil, for: service)
     }
 
@@ -273,11 +380,13 @@ extension BLEWatchAdapter: CBPeripheralDelegate {
                 peripheral.setNotifyValue(true, for: char)
             }
         }
+        diag("discovered \(self.characteristics.count) characteristics")
         // Read Capabilities once — the contract's handshake step.
         if let caps = characteristics[FuseMindGATT.capabilities] {
             peripheral.readValue(for: caps)
         } else {
             // No capabilities characteristic = not a FuseMind watch.
+            diag("no Capabilities characteristic; not a FuseMind watch")
             transition(to: .disconnected)
             finishConnect(success: false)
         }
@@ -290,6 +399,9 @@ extension BLEWatchAdapter: CBPeripheralDelegate {
         case FuseMindGATT.capabilities:
             if let caps = try? JSONDecoder.fuseMind.decode(WatchCapabilities.self, from: data) {
                 watchCapabilities = caps
+                connectedWatchName = peripheral.name
+                reconnectAttempts = 0
+                diag("capabilities read from \(peripheral.name ?? "watch"): mic=\(caps.hasMic) speaker=\(caps.hasSpeaker) gps=\(caps.hasGPS) hrm=\(caps.hasHRM) maxNotif=\(caps.maxNotifLength)")
                 transition(to: .connected) // handshake complete
                 finishConnect(success: true)
             }
