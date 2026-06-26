@@ -33,6 +33,13 @@ media control, file transfer, and voice actions.
    as the template. No keys in code, commits, or logs.
 6. **Test on real hardware.** BLE behaves differently on devices than emulators.
    A feature is not done until it works on a real Samsung Watch 6 + iPhone.
+7. **The watch reads notifications, not the iPhone app.** iOS gives third-party
+   apps NO access to the device-wide notification stream, and Apple's ANCS makes
+   the iPhone the GATT *server* and the accessory the GATT *client*. So the
+   **watch** is the ANCS consumer (it bonds to the iPhone and reads ANCS service
+   `7905F431-B5CE-4E99-A40F-4B1E122D00D0` directly); the iOS core never reads
+   notifications. Do not write an "ANCS reader on iOS" — it cannot exist. See
+   `docs/adr/ADR-002-ancs-watch-consumer.md`.
 
 ## Repository map
 
@@ -50,7 +57,10 @@ docs/
   ble-protocol.md    the shared contract (UUIDs + payloads)
   DEVELOPMENT.md     the phase plan (no dates — completion-gated)
   issues/            per-phase task specs with acceptance criteria
-  adr/               architecture decision records
+  adr/               architecture decision records (see ADR-002: watch reads ANCS)
+  spikes/            throwaway feasibility probes (e.g. ancs-spike-README.md)
+spikes/
+  ancs-consumer-android/   feasibility spike: can a BLE central read iPhone ANCS?
 ```
 
 ## Conventions

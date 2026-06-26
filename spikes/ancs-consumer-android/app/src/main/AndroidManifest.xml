@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FuseMind ANCS feasibility SPIKE — manifest.
+
+  This app is a BLE *central* that connects to an already-bonded iPhone and
+  tries to read Apple Notification Center Service (ANCS). It is NOT the product;
+  it exists only to prove/disprove feasibility (ADR-002).
+
+  We connect to an already-bonded device (no active scan needed), so on
+  Android 12+ BLUETOOTH_CONNECT is the permission that matters. BLUETOOTH_SCAN
+  is declared (neverForLocation) in case you extend the spike to scan.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="true" />
+
+    <!-- Android 12+ (API 31+) runtime Bluetooth permissions -->
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!-- Legacy Bluetooth permissions for API < 31 -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <application
+        android:label="ANCS Spike"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
