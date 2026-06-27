@@ -54,11 +54,28 @@ iOS may show a **"Show Notifications"** prompt for the accessory — you must
    - Grant the Bluetooth permission prompt.
    - Tap **Refresh bonded devices**, then tap your **iPhone** in the list.
 
-4. **Generate notifications**
-   - **Lock the iPhone** (ANCS mainly pushes when the phone is locked).
-   - Send yourself a **text / WhatsApp / Mail**, or trigger a calendar alert.
+4. **Confirm the connection holds**
+   - After `✓ Subscribed` you should see the log go **quiet** — one stable
+     connection, no repeating `Disconnected` / reconnect lines. (The spike no
+     longer auto-reconnects; it holds a single session until you tap **Refresh**.
+     If you *do* see one `Session ended` line, the link dropped once — tap
+     **Refresh**, then the iPhone, to re-arm. It should not loop.)
 
-5. **Read the logs** — on-screen in the app, and/or:
+5. **Generate notifications — the actual proof**
+   - With the connection **holding steady**, **lock the iPhone** (ANCS mainly
+     pushes when the phone is locked).
+   - **Send yourself a text** (or WhatsApp / Mail, or trigger a calendar alert).
+   - In the log you should see a `NOTIFICATION: Added …` line followed by the
+     decoded attributes:
+     ```
+     NOTIFICATION: Added Social uid=12345 flags=0x00 count=0
+        app: com.apple.MobileSMS
+        title: <sender>
+        message: <the text you sent>
+     ```
+     Seeing `app:` / `title:` / `message:` lines = **ANCS works end to end** ✅.
+
+6. **Read the logs** — on-screen in the app, and/or:
    ```
    adb logcat -s ANCSpike
    ```

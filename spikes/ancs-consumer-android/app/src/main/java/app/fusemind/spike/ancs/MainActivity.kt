@@ -36,6 +36,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var logScroll: ScrollView
     private var client: AncsGattClient? = null
 
+    /** True while a BLE session is live. Prevents the lifecycle/UI from kicking
+     *  off a second connect (the cause of the old connect/disconnect loop). */
+    private var sessionActive = false
+
     private val btManager by lazy { getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager }
 
     private val requiredPermissions: Array<String>
@@ -57,10 +61,8 @@ class MainActivity : ComponentActivity() {
         log("ANCS feasibility spike. Goal: prove a BLE central can read iPhone ANCS.")
         log("Step 1: pair this device with the iPhone in system Bluetooth settings.")
         log("Step 2: pick the iPhone below.  (Watch logcat with tag 'ANCSpike'.)")
-    }
-
-    override fun onStart() {
-        super.onStart()
+        // Populate the list ONCE here — NOT in onStart(), which re-fires on every
+        // foreground/dialog-dismiss and used to churn the BLE session.
         if (hasAllPermissions()) refreshDevices() else permissionLauncher.launch(requiredPermissions)
     }
 
@@ -73,7 +75,12 @@ class MainActivity : ComponentActivity() {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
 
+    /** Rebuilds the bonded-device list. Tears down any live session first, so
+     *  this doubles as the "reset" action. Only called from onCreate, the
+     *  permission grant, and the Refresh button — never from a lifecycle hook. */
     private fun refreshDevices() {
+        client?.close()
+        sessionActive = false
         deviceContainer.removeAllViews()
         val bonded = try { btManager.adapter?.bondedDevices ?: emptySet() } catch (e: SecurityException) { emptySet() }
         if (bonded.isEmpty()) {
@@ -85,14 +92,35 @@ class MainActivity : ComponentActivity() {
             val name = try { d.name } catch (e: SecurityException) { null } ?: "(unknown)"
             deviceContainer.addView(Button(this).apply {
                 text = "$name\n${d.address}"
-                setOnClickListener {
-                    log("──────── connecting to $name ────────")
-                    client?.close()
-                    client = AncsGattClient(this@MainActivity) { msg -> runOnUiThread { log(msg) } }
-                    client?.connect(d)
-                }
+                setOnClickListener { startSession(d, name) }
             })
         }
+    }
+
+    private fun startSession(device: android.bluetooth.BluetoothDevice, name: String) {
+        if (sessionActive) {
+            log("A session is already active. Tap 'Refresh bonded devices' to reset.")
+            return
+        }
+        sessionActive = true
+        setDeviceButtonsEnabled(false) // no second tap can re-enter while we're live
+        log("──────── connecting to $name ────────")
+        client?.close()
+        client = AncsGattClient(
+            context = this,
+            log = { msg -> runOnUiThread { log(msg) } },
+            onEnded = { runOnUiThread { onSessionEnded() } }
+        )
+        client?.connect(device)
+    }
+
+    private fun onSessionEnded() {
+        sessionActive = false
+        setDeviceButtonsEnabled(true)
+    }
+
+    private fun setDeviceButtonsEnabled(enabled: Boolean) {
+        for (i in 0 until deviceContainer.childCount) deviceContainer.getChildAt(i).isEnabled = enabled
     }
 
     private fun log(msg: String) {
