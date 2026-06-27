@@ -1,6 +1,6 @@
 # ADR-002: The watch is the ANCS consumer (notifications), not the iPhone app
 
-- **Status:** Accepted
+- **Status:** Accepted — **feasibility CONFIRMED on hardware (see below)**
 - **Phase:** 2 (Notifications)
 - **Author:** Mridhul (Architect) · drafted with Claude Code
 - **Supersedes nothing; clarifies:** `docs/issues/phase-2-notifications.md` P2-001
@@ -69,6 +69,31 @@ uncharted for this project, the decision is gated by a **feasibility spike**
 or disproves whether a BLE central can actually receive ANCS from a bonded
 iPhone in our setup, *before* we invest in the production Wear OS implementation.
 
+## Feasibility result (spike outcome) — ✅ CONFIRMED
+
+The `spikes/ancs-consumer-android/` probe was run on real hardware against a
+bonded iPhone. Outcome:
+
+- The BLE central **discovered the ANCS service** (`7905F431-…`) on the iPhone.
+- It **subscribed** to the Notification Source and held a **stable connection**.
+- It **received live `NOTIFICATION: Added` events with correct categories**
+  (Other, HealthAndFitness, Voicemail, BusinessAndFinance, Social, …) as the
+  iPhone got real notifications.
+- After serializing GATT operations through a single-op queue (Android allows
+  only one in-flight op; the Control Point write was colliding with other ops),
+  the **Get Notification Attributes** round-trip succeeds and the consumer reads
+  the **app identifier, title, and message** off the Data Source.
+
+**Conclusion:** a non-Apple BLE central *can* consume iPhone ANCS in our setup.
+**Option A is validated** — FuseMind proceeds to design the production Wear OS
+ANCS consumer (reusing the parsing in `spikes/…/Ancs.kt`). The spike itself
+stays as a throwaway reference and is not shipped.
+
+> Note for the production build: Android delivers exactly one GATT operation at
+> a time. The production consumer MUST serialize GATT ops (MTU, discovery,
+> descriptor writes, Control Point writes) through a queue, completing each on
+> its callback — exactly as the spike now does.
+
 ## Alternatives considered
 
 1. **Option A — watch-as-ANCS-consumer (chosen).**
@@ -111,9 +136,11 @@ iPhone in our setup, *before* we invest in the production Wear OS implementation
 - Classification moves watch-side for notifications. *Mitigation:* the agent is
   reachable over the network from the watch; local H/M/L heuristic is the
   fallback (consistent with golden rule #4).
-- **Risk the spike fails** (Wear OS may not bond to iPhone ANCS at all). If so,
-  we fall back to Option B as an interim and revisit. The spike exists precisely
-  to surface this before committing.
+- ~~**Risk the spike fails** (Wear OS may not bond to iPhone ANCS at all).~~
+  **Resolved:** core ANCS consumption by a non-Apple BLE central is confirmed
+  (see *Feasibility result*). One open item remains — confirm the **Watch 6 /
+  Wear OS** bonds and consumes ANCS identically to the test device; carry this
+  into the production-consumer ticket as the first on-watch checkpoint.
 
 ## ANCS reference (for implementers)
 
